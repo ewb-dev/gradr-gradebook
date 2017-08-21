@@ -1,0 +1,15 @@
+#select_course .btn-group-vertical, 
+#select_assn .btn-group-vertical, 
+#select_grade .btn-group-vertical, 
+#select_student .btn-group-vertical,
+#select_asscat .btn-group-vertical {
+  width: 100%;
+}
+
+#select_course .btn-group-vertical .btn, 
+#select_assn .btn-group-vertical .btn, 
+#select_grade .btn-group-vertical .btn, 
+#select_student .btn-group-vertical .btn,
+#select_asscat .btn-group-vertical .btn {
+  white-space: normal;
+}
