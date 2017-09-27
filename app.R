@@ -17,6 +17,33 @@ library(RPostgreSQL)
 library(DT)
 library(purrr)
 library(yaml)
+library(stringr)
+library(httr)
+library(jsonlite)
+library(openssl)
+
+
+options(shiny.port = 5000)
+
+GET_URL <- function(domain, endpoint, params) {
+  paste0(
+    domain,
+    '/',
+    endpoint,
+    '?',
+    paste(
+      mapply(
+        paste,
+        names(params),
+        params,
+        MoreArgs = list(sep = '=')
+      ),
+      collapse = '&'
+    )
+  )
+}
+
+state_code <- stringi::stri_rand_strings(1, 64)
 
 source('db_module.R')
 source('ui_module.R')
@@ -27,11 +54,19 @@ ui <- fluidPage(
   
   tags$head(
     tags$link(rel = "stylesheet", type = "text/css", href = "css/bootstrap.min.css"),
-    tags$link(rel = "stylesheet", type = "text/css", href = "css/custom.css")
+    tags$link(rel = "stylesheet", type = "text/css", href = "css/custom.css"),
+    useShinyjs()
   ),
    
    # Application title
    titlePanel("Amy's Gradebook"),
+  
+  fluidRow(
+    column(
+      width = 1,
+      actionButton('login', 'Log In')
+    )
+  ),
    
    # Main application nav
    navlistPanel(
@@ -96,7 +131,7 @@ ui <- fluidPage(
 
 ## Server Function ------------------------------------------------------------
 server <- function(input, output, session) {
-  
+  ## Initial Setup ------------------------------------------------------------
   # create a connection pool
   # save the password that we can "hide" it as best as we can by collapsing it
  db_info <- yaml.load_file('config/db.yaml')
@@ -118,11 +153,89 @@ server <- function(input, output, session) {
   reload_students <- reactiveVal(value = 0)
   reload_grades <- reactiveVal(value = 0)
   
+  user_id <- reactiveVal(value = NULL)
+  auth0 <- yaml.load_file('config/auth0_variables.yaml')
+  
+  ## Login Functionality ------------------------------------------------------
+  #If the query string contains the 'code' value, leverage the code value
+  #against the auth0 oauth/token endpoint to retrieve a JWT containing
+  #the user id, then extract the user id from the JWT
+  observe({
+    queryString <- getQueryString()
+    if(exists('code', where = queryString)) {
+      authCode <- queryString$code
+      returned_state <- queryString$state
+      if(returned_state == state_code) {
+        access_token <- POST(
+          paste0(
+            auth0$AUTH0_DOMAIN,
+            '/oauth/token'
+          ),
+          encode = 'json',
+          body = list(
+            'grant_type' = 'authorization_code',
+            'client_id' = auth0$AUTH0_CLIENT_ID,
+            'client_secret' = auth0$AUTH0_CLIENT_SECRET,
+            'code' = authCode,
+            'redirect_uri' = auth0$AUTH0_CALLBACK_URL
+          )
+        )
+        
+        access_token %>%
+          content() %>%
+          .$id_token %>%
+          str_split(., pattern = '\\.', simplify = T) %>%
+          .[1, 2] %>%
+          base64_decode() %>%
+          rawToChar() %>%
+          {
+            if(!str_detect(., '\\}$')) {
+              paste0(., '}')
+            } else {
+              .
+            }
+          } %>%
+          fromJSON() %>%
+          .$sub %>%
+          user_id()
+      }
+    }
+    if(exists('authCode')) {
+      if(!is.null(authCode)){
+        updateQueryString('')
+      }
+    }
+  })
+  
+  #Redirect user to the sign-in page when they click the login button
+  observeEvent(
+    input$login,
+    {
+      runjs(
+        paste0(
+          'window.location.href=\'',
+          GET_URL(
+            auth0$AUTH0_DOMAIN,
+            'authorize',
+            list(
+              'response_type' = 'code',
+              'client_id' = auth0$AUTH0_CLIENT_ID,
+              'redirect_uri' = auth0$AUTH0_CALLBACK_URL,
+              'state' = state_code,
+              'scope' = 'openid'
+            )
+          ),
+          '\';'
+        )
+      )
+    }
+  )
+  
   ## Maintain Course Elements Lists -------------------------------------------
   
   courses <- eventReactive(
     reload_courses(),
-    courses_named_list(pool),
+    courses_named_list(pool, user_id()),
     ignoreNULL = F
   )
   
@@ -260,7 +373,11 @@ server <- function(input, output, session) {
   ## Add Button Listeners -----------------------------------------------------
   ## Add Course
   observeEvent(input$add_course, {
-    showModal(add_course_modal('add', pool, input))
+    if(is.null(user_id)) {
+      showModal(login_modal)
+    } else {
+      showModal(add_course_modal('add', pool, input))
+    }
   })
   
   observeEvent(input$add_course_ok, {
@@ -270,6 +387,7 @@ server <- function(input, output, session) {
       'course_year' = as.integer(input$add_course_year),
       'course_section' = as.character(input$add_course_section),
       'course_description' = as.character(input$add_course_description),
+      'user_auth_id' = as.character(user_id()),
       stringsAsFactors = F
     )
     
@@ -280,7 +398,11 @@ server <- function(input, output, session) {
   
   ## Add Assignment Category
   observeEvent(input$add_asscat, {
-    showModal(add_asscat_modal('add', pool, input))
+    if(is.null(user_id)) {
+      showModal(login_modal)
+    } else {
+      showModal(add_asscat_modal('add', pool, input))
+    }
   })
 
   observeEvent(input$add_asscat_ok, {
@@ -299,7 +421,11 @@ server <- function(input, output, session) {
   
   ## Add Assignment
   observeEvent(input$add_assn, {
-    showModal(add_assn_modal('add', pool, input))
+    if(is.null(user_id)) {
+      showModal(login_modal)
+    } else {
+      showModal(add_assn_modal('add', pool, input))
+    }
   })
   
   observeEvent(input$add_assn_ok, {
@@ -320,7 +446,11 @@ server <- function(input, output, session) {
   
   ## Add Student
   observeEvent(input$add_student, {
-    showModal(add_student_modal('add', pool, input))
+    if(is.null(user_id)) {
+      showModal(login_modal)
+    } else {
+      showModal(add_student_modal('add', pool, input))
+    }
   })
   
   observeEvent(input$add_student_ok, {
@@ -338,7 +468,11 @@ server <- function(input, output, session) {
   
   ## Add Grade
   observeEvent(input$add_grade, {
-    showModal(add_grade_modal('add', pool, input))
+    if(is.null(user_id)) {
+      showModal(login_modal)
+    } else {
+      showModal(add_grade_modal('add', pool, input))
+    }
   })
   
   observeEvent(input$add_grade_ok, {
@@ -360,7 +494,11 @@ server <- function(input, output, session) {
   ## Modify Button Listeners --------------------------------------------------
   ## Modify Course
   observeEvent(input$mod_course, {
-    showModal(add_course_modal('mod', pool, input))
+    if(is.null(user_id)) {
+      showModal(login_modal)
+    } else {
+      showModal(add_course_modal('mod', pool, input))
+    }
   })
   
   observeEvent(input$mod_course_ok, {
@@ -371,6 +509,7 @@ server <- function(input, output, session) {
       'course_year' = as.integer(input$add_course_year),
       'course_section' = as.character(input$add_course_section),
       'course_description' = as.character(input$add_course_description),
+      'user_auth_id' = as.character(user_id()),
       stringsAsFactors = F
     )
     
@@ -383,7 +522,11 @@ server <- function(input, output, session) {
   
   ## Modify Assignment Category
   observeEvent(input$mod_asscat, {
-    showModal(add_asscat_modal('mod', pool, input))
+    if(is.null(user_id)) {
+      showModal(login_modal)
+    } else {
+      showModal(add_asscat_modal('mod', pool, input))
+    }
   })
   
   observeEvent(input$mod_asscat_ok, {
@@ -405,7 +548,11 @@ server <- function(input, output, session) {
   
   ## Modify Assignment
   observeEvent(input$mod_assn, {
-    showModal(add_assn_modal('mod', pool, input))
+    if(is.null(user_id)) {
+      showModal(login_modal)
+    } else {
+      showModal(add_assn_modal('mod', pool, input))
+    }
   })
   
   observeEvent(input$mod_assn_ok, {
@@ -429,7 +576,11 @@ server <- function(input, output, session) {
   
   ## Modify Student
   observeEvent(input$mod_student, {
-    showModal(add_student_modal('mod', pool, input))
+    if(is.null(user_id)) {
+      showModal(login_modal)
+    } else {
+      showModal(add_student_modal('mod', pool, input))
+    }
   })
   
   observeEvent(input$mod_student_ok, {
@@ -450,7 +601,11 @@ server <- function(input, output, session) {
   
   ## Modify Grade
   observeEvent(input$mod_grade, {
-    showModal(add_grade_modal('mod', pool, input))
+    if(is.null(user_id)) {
+      showModal(login_modal)
+    } else {
+      showModal(add_grade_modal('mod', pool, input))
+    }
   })
   
   observeEvent(input$mod_grade_ok, {

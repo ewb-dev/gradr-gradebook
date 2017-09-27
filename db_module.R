@@ -78,8 +78,16 @@ get_filtered_table <- function(pool, table, filter_list) {
 }
 
 ## Named List Functions -------------------------------------------------------
-courses_named_list <- function(pool) {
-  courses <- get_all_table(pool, 'courses')
+courses_named_list <- function(pool, user_id) {
+  if(is.null(user_id)) return(data.frame())
+  courses <- get_filtered_table(
+    pool,
+    'courses',
+    list(
+      names = list('user_auth_id'),
+      values = list(user_id)
+    )
+  )
   if (nrow(courses) > 0) {
     course_choices <- setNames(
       courses$id, 

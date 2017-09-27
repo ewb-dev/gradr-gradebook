@@ -1,4 +1,8 @@
 # MODALS ----------------------------------------------------------------------
+## login_modal ----------------------------------------------------------------
+login_modal <- modalDialog(
+  p('Please login to view gradebook content')
+)
 ## add_course_modal -----------------------------------------------------------
 add_course_modal <-  function(type = c('add', 'mod'), pool, input) {
   
